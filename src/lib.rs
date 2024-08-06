@@ -103,7 +103,20 @@ impl<C: 'static + Send, T: Task<C> + 'static + Send> LocalSpawner<C, T> {
 
     /// Spawn a task
     ///
-    /// This will kick task to start it's main handler loop
+    /// This will kick task to start it's main handler loop.
+    ///
+    /// User need to prepare a `[tokio::sync::oneshot]` channel to receive notification
+    /// when task successful started.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let spawner = LocalSpawner::new_current();
+    /// let (tx, rx) = oneshot::channel();
+    /// let file = File::new(1);
+    /// spawner.spawn(file, tx);
+    /// let handler1 = rx.blocking_recv().expect("failed to get back file handler");
+    /// ```
     pub fn spawn(&self, task: T, tx: oneshot::Sender<TaskHandler<C>>) {
         self.send.send((task, tx)).expect("Thread with LocalSet has shut down.");
     }
