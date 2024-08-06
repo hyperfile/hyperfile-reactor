@@ -6,6 +6,9 @@ use tokio::task::LocalSet;
 // based on example code:
 // https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html#use-inside-tokiospawn
 
+/// Handler return to user.
+///
+/// Use [`TaskHandler::send`] to submit task context into main handler loop.
 pub struct TaskHandler<T> {
     tx: mpsc::UnboundedSender<T>,
 }
@@ -26,8 +29,13 @@ impl<T> TaskHandler<T> {
 
 pub trait Task<T: 'static> {
 
+    /// Handler need to be implement by user to process a single task.
+    ///
+    /// **Be careful:** since this handler running inside of a single thread,
+    /// never blocking it, all IO operations should be spawn out.
     fn handler(&mut self, ctx: T) -> impl std::future::Future<Output = ()>;
 
+    /// Start main handler loop.
 	fn start(mut self) -> TaskHandler<T> where Self: Sized + 'static {
         let (tx, mut rx) = mpsc::unbounded_channel::<T>();
         tokio::task::spawn_local(async move {
@@ -52,10 +60,12 @@ impl<C, T> Clone for LocalSpawner<C, T> {
 }
 
 impl<C: 'static + Send, T: Task<C> + 'static + Send> LocalSpawner<C, T> {
+    /// Create a new `LocalSpawner` instance use `[tokio::runtime::Builder::new_current_thread]`.
     pub fn new_current() -> Self {
         Self::new(None)
     }
 
+    /// Create a new `LocalSpawner` instance use supplied `[tokio::runtime::Runtime]`.
     pub fn new(runtime: Option<Arc<Runtime>>) -> Self {
         let (send, mut recv) = mpsc::unbounded_channel::<(T, oneshot::Sender<TaskHandler<C>>)>();
 
@@ -91,6 +101,9 @@ impl<C: 'static + Send, T: Task<C> + 'static + Send> LocalSpawner<C, T> {
         }
     }
 
+    /// Spawn a task
+    ///
+    /// This will kick task to start it's main handler loop
     pub fn spawn(&self, task: T, tx: oneshot::Sender<TaskHandler<C>>) {
         self.send.send((task, tx)).expect("Thread with LocalSet has shut down.");
     }
