@@ -36,7 +36,7 @@ pub trait Task<T: 'static> {
     fn handler(&mut self, ctx: T) -> impl std::future::Future<Output = ()>;
 
     /// Start main handler loop.
-	fn start(mut self) -> TaskHandler<T> where Self: Sized + 'static {
+    fn start(mut self) -> TaskHandler<T> where Self: Sized + 'static {
         let (tx, mut rx) = mpsc::unbounded_channel::<T>();
         tokio::task::spawn_local(async move {
             while let Some(ctx) = rx.recv().await {
