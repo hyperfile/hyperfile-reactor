@@ -36,13 +36,13 @@ impl Task<TaskContext> for File {
 }
 
 fn main() {
-	let spawner = LocalSpawner::new_current();
-	let (tx, rx) = oneshot::channel();
+    let spawner = LocalSpawner::new_current();
+    let (tx, rx) = oneshot::channel();
     let file = File::new(1);
     spawner.spawn(file, tx);
     let handler1 = rx.blocking_recv().expect("failed to get back file handler");
 
-	let (tx, rx) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
     let file = File::new(2);
     spawner.spawn(file, tx);
     let handler2 = rx.blocking_recv().expect("failed to get back file handler");
