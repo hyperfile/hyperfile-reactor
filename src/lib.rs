@@ -25,11 +25,15 @@ impl<T> Clone for TaskHandler<T> {
 
 impl<T> TaskHandler<T> {
     pub fn send(&self, ctx: T) {
-        let _ = self.tx.send(ctx);
+        if let Err(e) = self.tx.send(ctx) {
+            panic!("failed to send context through mpsc channel, reason: {e}");
+        }
     }
 
     pub fn send_highprio(&self, ctx: T) {
-        let _ = self.highprio_tx.send(ctx);
+        if let Err(e) = self.highprio_tx.send(ctx) {
+            panic!("failed to send context through high prio mpsc channel, reason: {e}");
+        }
     }
 }
 
