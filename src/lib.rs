@@ -11,12 +11,14 @@ use tokio::task::LocalSet;
 /// Use [`TaskHandler::send`] to submit task context into main handler loop.
 pub struct TaskHandler<T> {
     tx: mpsc::UnboundedSender<T>,
+    highprio_tx: mpsc::UnboundedSender<T>,
 }
 
 impl<T> Clone for TaskHandler<T> {
     fn clone(&self) -> Self {
         Self {
             tx: self.tx.clone(),
+            highprio_tx: self.highprio_tx.clone(),
         }
     }
 }
@@ -24,6 +26,10 @@ impl<T> Clone for TaskHandler<T> {
 impl<T> TaskHandler<T> {
     pub fn send(&self, ctx: T) {
         let _ = self.tx.send(ctx);
+    }
+
+    pub fn send_highprio(&self, ctx: T) {
+        let _ = self.highprio_tx.send(ctx);
     }
 }
 
@@ -38,12 +44,13 @@ pub trait Task<T: 'static> {
     /// Start main handler loop.
     fn start(mut self) -> TaskHandler<T> where Self: Sized + 'static {
         let (tx, mut rx) = mpsc::unbounded_channel::<T>();
+        let (highprio_tx, mut highprio_rx) = mpsc::unbounded_channel::<T>();
         tokio::task::spawn_local(async move {
-            while let Some(ctx) = rx.recv().await {
+            while let Some(ctx) = futures_lite::future::or(highprio_rx.recv(), rx.recv()).await {
                 self.handler(ctx).await;
             }
         });
-        TaskHandler { tx: tx, }
+        TaskHandler { tx: tx, highprio_tx: highprio_tx, }
     }
 }
 
