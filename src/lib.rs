@@ -95,8 +95,9 @@ impl<C: 'static + Send, T: Task<C> + 'static + Send> LocalSpawner<C, T> {
 
             local.spawn_local(async move {
                 while let Some((task, tx)) = recv.recv().await {
-                    let s = task.start();
-                    let _ = tx.send(s);
+                    let task_handle = task.start();
+                    // send task_handle to external
+                    let _ = tx.send(task_handle);
                 }
                 // If the while loop returns, then all the LocalSpawner
                 // objects have been dropped.
