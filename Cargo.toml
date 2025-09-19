@@ -2,6 +2,12 @@
 name = "hyperfile-reactor"
 version = "0.2.0"
 edition = "2021"
+license = "Apache-2.0"
+description = "A lightweight task execution framework built on top of Tokio's LocalSet"
+authors = ["Dai Yiyang"]
+keywords = ["concurrency", "reactor"]
+homepage = "https://github.com/hyperfile/hyperfile-reactor"
+repository = "https://github.com/hyperfile/hyperfile-reactor"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
