@@ -1,5 +1,5 @@
 [package]
-name = "reactor"
+name = "hyperfile-reactor"
 version = "0.1.0"
 edition = "2021"
 
