@@ -57,7 +57,11 @@ impl<T: std::fmt::Debug> std::error::Error for SendError<T> {}
 
 /// Returned from non-blocking send paths: either the bounded channel is full
 /// or the task has stopped.
+///
+/// This enum is `#[non_exhaustive]`; callers must include a wildcard arm
+/// when matching to remain forward-compatible.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum TrySendError<T> {
     /// Bounded channel currently full. The item is returned to the caller.
     Full(T),
@@ -114,7 +118,11 @@ pub trait Task<Ctx>: 'static {
 // ---------------------------------------------------------------------------
 
 /// Channel capacity policy.
+///
+/// `#[non_exhaustive]` so that adding new policies (e.g. bounded with an
+/// overflow strategy) in a future release is not a breaking change.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum Capacity {
     /// Bounded channel; producers apply backpressure when full.
     Bounded(usize),
@@ -162,8 +170,16 @@ impl<T> DynSender<T> {
 }
 
 /// Internal unified receiver used by [`Scheduler`] implementations.
+///
+/// User code should treat this as opaque: only call [`try_recv`](Self::try_recv)
+/// or [`poll_recv`](Self::poll_recv). Both the enum and its variants are
+/// `#[non_exhaustive]`; new representations may be added without a major
+/// version bump, and external code may not construct or destructure them.
+#[non_exhaustive]
 pub enum DynReceiver<T> {
+    #[non_exhaustive]
     Bounded(mpsc::Receiver<T>),
+    #[non_exhaustive]
     Unbounded(mpsc::UnboundedReceiver<T>),
 }
 
