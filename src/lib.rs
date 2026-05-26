@@ -30,6 +30,7 @@
 //! handler.send(high, 1).unwrap();
 //! handler.send(low,  2).unwrap();
 //! ```
+#![warn(missing_docs)]
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -44,8 +45,18 @@ use tokio::task::LocalSet;
 // ---------------------------------------------------------------------------
 
 /// Returned when a send fails because the task has stopped.
+///
+/// The wrapped value is the context that could not be delivered, so the
+/// caller can recover ownership and retry, log, or discard it.
 #[derive(Debug)]
 pub struct SendError<T>(pub T);
+
+impl<T> SendError<T> {
+    /// Recover the context that could not be sent.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
 
 impl<T> std::fmt::Display for SendError<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -70,6 +81,7 @@ pub enum TrySendError<T> {
 }
 
 impl<T> TrySendError<T> {
+    /// Recover the context that could not be sent.
     pub fn into_inner(self) -> T {
         match self {
             Self::Full(t) | Self::Closed(t) => t,
@@ -110,6 +122,13 @@ impl std::error::Error for SpawnError {}
 /// Offload blocking or long-running IO via `tokio::task::spawn`,
 /// `spawn_blocking`, or similar.
 pub trait Task<Ctx>: 'static {
+    /// Process one context delivered through one of the task's channels.
+    ///
+    /// This is invoked sequentially by the scheduler loop on the reactor
+    /// thread; while it is `await`ing, no other context for this task is
+    /// processed. Keep the synchronous portion short, and detach
+    /// long-running async work via `tokio::task::spawn` rather than
+    /// awaiting it inline.
     fn handle(&mut self, ctx: Ctx) -> impl std::future::Future<Output = ()>;
 }
 
@@ -177,8 +196,10 @@ impl<T> DynSender<T> {
 /// version bump, and external code may not construct or destructure them.
 #[non_exhaustive]
 pub enum DynReceiver<T> {
+    /// Wraps a bounded `tokio::sync::mpsc::Receiver`.
     #[non_exhaustive]
     Bounded(mpsc::Receiver<T>),
+    /// Wraps a `tokio::sync::mpsc::UnboundedReceiver`.
     #[non_exhaustive]
     Unbounded(mpsc::UnboundedReceiver<T>),
 }
@@ -194,10 +215,7 @@ impl<T> DynReceiver<T> {
     }
 
     /// Poll-based receive; mirrors `Receiver::poll_recv`.
-    pub fn poll_recv(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<T>> {
+    pub fn poll_recv(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<T>> {
         match self {
             Self::Bounded(r) => r.poll_recv(cx),
             Self::Unbounded(r) => r.poll_recv(cx),
@@ -223,6 +241,12 @@ fn make_channel<T>(cap: Capacity) -> (DynSender<T>, DynReceiver<T>) {
 // ---------------------------------------------------------------------------
 
 /// An opaque token identifying one channel registered on a task.
+///
+/// Obtained from [`TaskBuilder::add_channel`] (or the `add_bounded` /
+/// `add_unbounded` convenience methods) and passed to
+/// [`TaskHandler::send`] / [`try_send`](TaskHandler::try_send) /
+/// [`send_async`](TaskHandler::send_async) to select which channel to
+/// produce on. Cheap to copy.
 pub struct Channel<Ctx> {
     idx: usize,
     _marker: PhantomData<fn(Ctx)>,
@@ -250,6 +274,12 @@ struct ChannelSpec {
 }
 
 /// Declares the set of channels a task will receive on.
+///
+/// Build it up with [`add_channel`](Self::add_channel),
+/// [`add_unbounded`](Self::add_unbounded), or
+/// [`add_bounded`](Self::add_bounded), each of which returns a
+/// [`Channel`] token to hold onto. Then pass the builder to
+/// [`Reactor::spawn`](crate::Reactor::spawn) to start the task.
 pub struct TaskBuilder<Ctx> {
     channels: Vec<ChannelSpec>,
     _marker: PhantomData<fn(Ctx)>,
@@ -262,6 +292,7 @@ impl<Ctx> Default for TaskBuilder<Ctx> {
 }
 
 impl<Ctx> TaskBuilder<Ctx> {
+    /// Create an empty builder.
     pub fn new() -> Self {
         Self {
             channels: Vec::new(),
@@ -292,6 +323,7 @@ impl<Ctx> TaskBuilder<Ctx> {
         self.add_channel(priority, Capacity::Bounded(capacity))
     }
 
+    /// Number of channels registered so far.
     pub fn channel_count(&self) -> usize {
         self.channels.len()
     }
@@ -333,14 +365,11 @@ impl<Ctx> TaskHandler<Ctx> {
 
     /// Async send with backpressure. On bounded channels this awaits free
     /// capacity; on unbounded channels it resolves immediately.
-    pub async fn send_async(
-        &self,
-        ch: Channel<Ctx>,
-        ctx: Ctx,
-    ) -> Result<(), SendError<Ctx>> {
+    pub async fn send_async(&self, ch: Channel<Ctx>, ctx: Ctx) -> Result<(), SendError<Ctx>> {
         self.senders[ch.idx].send_async(ctx).await
     }
 
+    /// Number of channels registered on this task.
     pub fn channel_count(&self) -> usize {
         self.senders.len()
     }
@@ -357,6 +386,15 @@ impl<Ctx> TaskHandler<Ctx> {
 /// Return `None` only when every receiver is closed and the task should
 /// terminate.
 pub trait Scheduler<Ctx>: Send + 'static {
+    /// Pick the next context to process.
+    ///
+    /// `rxs` and `priorities` are parallel arrays aligned by channel index
+    /// (registration order on the [`TaskBuilder`]). Implementations should
+    /// not assume any ordering between the two; the priorities slice is
+    /// read-only metadata.
+    ///
+    /// Returning `None` signals that every receiver is permanently closed
+    /// and the task's scheduler loop should exit.
     fn next_ctx<'a>(
         &'a mut self,
         rxs: &'a mut [DynReceiver<Ctx>],
@@ -387,20 +425,33 @@ impl<Ctx> Scheduler<Ctx> for StrictPriority {
 }
 
 /// Strict priority with anti-starvation: after `budget` consecutive items
-/// from the top-priority band, serve one item from the lowest non-empty band
-/// if any is waiting.
+/// from the top-priority band, serve one item from the lowest non-empty
+/// band if any is waiting.
+///
+/// The default ([`FairPriority::default`]) uses `budget = 16`, which is a
+/// reasonable middle ground for most workloads. Lower the budget if your
+/// low-priority work is latency-sensitive; raise it if high-priority
+/// throughput dominates.
 #[derive(Clone, Copy, Debug)]
 pub struct FairPriority {
-    pub budget: u32,
+    budget: u32,
     top_streak: u32,
 }
 
 impl FairPriority {
+    /// Build a fair-priority scheduler with the given anti-starvation
+    /// budget. After `budget` consecutive top-priority items, one
+    /// lower-priority item is served (if any is waiting).
     pub fn new(budget: u32) -> Self {
         Self {
             budget,
             top_streak: 0,
         }
+    }
+
+    /// Read back the configured budget.
+    pub fn budget(&self) -> u32 {
+        self.budget
     }
 }
 
@@ -465,10 +516,7 @@ fn sort_order(priorities: &[u8]) -> Vec<usize> {
     order
 }
 
-fn try_recv_in_order<Ctx>(
-    rxs: &mut [DynReceiver<Ctx>],
-    order: &[usize],
-) -> Option<Ctx> {
+fn try_recv_in_order<Ctx>(rxs: &mut [DynReceiver<Ctx>], order: &[usize]) -> Option<Ctx> {
     for &idx in order {
         if let Ok(v) = rxs[idx].try_recv() {
             return Some(v);
@@ -489,10 +537,7 @@ fn try_recv_in_order_tagged<Ctx>(
     None
 }
 
-fn try_recv_lowest_nonempty<Ctx>(
-    rxs: &mut [DynReceiver<Ctx>],
-    order: &[usize],
-) -> Option<Ctx> {
+fn try_recv_lowest_nonempty<Ctx>(rxs: &mut [DynReceiver<Ctx>], order: &[usize]) -> Option<Ctx> {
     for &idx in order.iter().rev() {
         if let Ok(v) = rxs[idx].try_recv() {
             return Some(v);
@@ -501,10 +546,7 @@ fn try_recv_lowest_nonempty<Ctx>(
     None
 }
 
-async fn await_any<Ctx>(
-    rxs: &mut [DynReceiver<Ctx>],
-    order: &[usize],
-) -> Option<(Ctx, bool)> {
+async fn await_any<Ctx>(rxs: &mut [DynReceiver<Ctx>], order: &[usize]) -> Option<(Ctx, bool)> {
     use std::future::poll_fn;
     use std::task::Poll;
 
@@ -747,10 +789,7 @@ mod tests {
 
     /// Drive the reactor with a gated task so all messages get enqueued
     /// before the scheduler sees any.
-    fn run_with_gate<S>(
-        channels: Vec<(u8, Capacity, Vec<u32>)>,
-        scheduler: S,
-    ) -> Vec<u32>
+    fn run_with_gate<S>(channels: Vec<(u8, Capacity, Vec<u32>)>, scheduler: S) -> Vec<u32>
     where
         S: Scheduler<u32>,
     {

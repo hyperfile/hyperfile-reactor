@@ -46,10 +46,7 @@ impl Task<FileCtx> for FileTask {
         // never blocked.
         tokio::task::spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            println!(
-                "file id {}, req: {}, resp: {}",
-                id, ctx.req.id, ctx.resp.id
-            );
+            println!("file id {}, req: {}, resp: {}", id, ctx.req.id, ctx.resp.id);
         });
     }
 }

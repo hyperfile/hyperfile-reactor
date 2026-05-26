@@ -128,7 +128,7 @@ let handler = reactor
 Built-ins:
 
 - [`StrictPriority`] — always serves the highest-priority non-empty channel.
-- [`FairPriority { budget }`] — strict priority with anti-starvation.
+- [`FairPriority::new(budget)`] — strict priority with anti-starvation.
   `FairPriority::default()` uses `budget = 16`.
 
 You can implement your own [`Scheduler`] if you need weighted round-robin,
