@@ -6,10 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0, minor versions may include breaking changes.
 
-## [0.3.0] - 2026-05-26
+## [0.3.1] - 2026-05-26
 
-This is a major redesign of the public API. Almost everything changed; see
-the migration notes below.
+This is the first published release of the 0.3 line. (0.3.0 was tagged
+internally but never released to crates.io.)
+
+A major redesign of the public API. Almost everything changed; see the
+migration notes below.
 
 ### Added
 
@@ -140,4 +143,4 @@ Notable behavioural differences to be aware of:
 - For backpressure, register channels with `add_bounded(prio, n)` and
   produce via `handler.send_async(...)`.
 
-[0.3.0]: https://github.com/hyperfile/hyperfile-reactor/releases/tag/v0.3.0
+[0.3.1]: https://github.com/hyperfile/hyperfile-reactor/releases/tag/v0.3.1
