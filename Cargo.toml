@@ -1,14 +1,22 @@
 [package]
 name = "hyperfile-reactor"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+rust-version = "1.75"
 license = "Apache-2.0"
 description = "A lightweight task execution framework built on top of Tokio's LocalSet"
 authors = ["Dai Yiyang"]
-keywords = ["concurrency", "reactor"]
+keywords = ["concurrency", "reactor", "tokio", "localset"]
+categories = ["asynchronous", "concurrency"]
 homepage = "https://github.com/hyperfile/hyperfile-reactor"
 repository = "https://github.com/hyperfile/hyperfile-reactor"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-futures-lite = "2.6.0"
+tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
