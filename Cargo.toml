@@ -1,6 +1,6 @@
 [package]
 name = "hyperfile-reactor"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
@@ -12,10 +12,10 @@ homepage = "https://github.com/hyperfile/hyperfile-reactor"
 repository = "https://github.com/hyperfile/hyperfile-reactor"
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
+tokio = { version = "1.27", features = ["rt", "sync", "macros", "time"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
+tokio = { version = "1.27", features = ["rt", "sync", "macros", "time"] }
 
 [[example]]
 name = "basic"

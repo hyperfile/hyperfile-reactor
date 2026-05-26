@@ -771,6 +771,22 @@ where
     tokio::task::spawn_local(async move {
         while let Some(ctx) = scheduler.next_ctx(&mut receivers, &priorities).await {
             task.handle(ctx).await;
+            // Cooperatively yield to the runtime after each item.
+            //
+            // The scheduler's non-blocking `try_recv` fast path bypasses
+            // tokio's coop budget; so does an `async fn handle` whose body
+            // never reaches an `.await` point. Without this nudge, a
+            // handler that synchronously re-queues onto a channel
+            // (e.g. `ResourceBusy => send_cb(ctx); return;`) would drive
+            // the scheduler in a tight loop and starve the runtime's I/O
+            // and timer drivers, including any `tokio::task::spawn`'d
+            // futures that the handler itself launched.
+            //
+            // `consume_budget().await` decrements the task-local coop
+            // budget; when exhausted (after ~128 iterations by default)
+            // it returns Pending, returning control to the runtime so it
+            // can drive timers / I/O before re-polling.
+            tokio::task::consume_budget().await;
         }
     });
 
@@ -1041,5 +1057,133 @@ mod tests {
 
         drop(handler);
         reactor.shutdown().expect("shutdown clean");
+    }
+
+    /// Regression test for the I/O/timer-starvation bug fixed by adding
+    /// `consume_budget` to the scheduler loop.
+    ///
+    /// A handler that synchronously re-queues onto the same channel used
+    /// to drive the scheduler in a tight loop, preventing the reactor
+    /// thread's tokio runtime from polling sibling tasks (e.g. timers
+    /// spawned via `tokio::task::spawn`). Here we ensure a 100 ms
+    /// `tokio::time::sleep` spawned from within `handle` actually fires
+    /// even while the scheduler is otherwise looping on a re-queued
+    /// context.
+    #[test]
+    fn handler_resubmit_does_not_starve_spawned_timer() {
+        use tokio::sync::Notify;
+
+        enum Msg {
+            /// Hand the worker its own producer + channel token.
+            Init {
+                handler: TaskHandler<Msg>,
+                ch: Channel<Msg>,
+            },
+            /// Kicks the loop and arms the timer once.
+            Start,
+            /// Re-queued by the handler on every iteration.
+            Retry,
+            /// Sent by the spawned timer; releases the watchdog.
+            Done,
+        }
+
+        struct Worker {
+            handler: Option<TaskHandler<Msg>>,
+            ch: Option<Channel<Msg>>,
+            armed: bool,
+            done: Arc<Notify>,
+        }
+
+        impl Task<Msg> for Worker {
+            async fn handle(&mut self, msg: Msg) {
+                match msg {
+                    Msg::Init { handler, ch } => {
+                        self.handler = Some(handler);
+                        self.ch = Some(ch);
+                    }
+                    Msg::Start => {
+                        let h = self.handler.clone().unwrap();
+                        let ch = self.ch.unwrap();
+                        if !self.armed {
+                            self.armed = true;
+                            let h_for_timer = h.clone();
+                            tokio::task::spawn(async move {
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                let _ = h_for_timer.send(ch, Msg::Done);
+                            });
+                        }
+                        let _ = h.send(ch, Msg::Retry);
+                    }
+                    Msg::Retry => {
+                        let h = self.handler.as_ref().unwrap();
+                        let ch = self.ch.unwrap();
+                        let _ = h.send(ch, Msg::Retry);
+                    }
+                    Msg::Done => {
+                        self.done.notify_one();
+                    }
+                }
+            }
+        }
+
+        let done = Arc::new(Notify::new());
+        let reactor = Reactor::<Msg, Worker>::new_current().unwrap();
+
+        let mut builder = TaskBuilder::<Msg>::new();
+        let cb = builder.add_channel(0, Capacity::Unbounded);
+        let ext = builder.add_channel(1, Capacity::Unbounded);
+
+        let handler = reactor
+            .spawn(
+                Worker {
+                    handler: None,
+                    ch: None,
+                    armed: false,
+                    done: done.clone(),
+                },
+                builder,
+            )
+            .unwrap();
+
+        handler
+            .send(
+                ext,
+                Msg::Init {
+                    handler: handler.clone(),
+                    ch: cb,
+                },
+            )
+            .ok()
+            .expect("init send");
+        handler.send(ext, Msg::Start).ok().expect("start send");
+
+        // Wait up to 2 s for the spawned timer to fire. With the bug,
+        // it never fires. With the fix, it fires in ~100 ms.
+        let waited = std::thread::scope(|s| {
+            let done = done.clone();
+            let h = s.spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async {
+                    tokio::time::timeout(Duration::from_secs(2), done.notified())
+                        .await
+                        .is_ok()
+                })
+            });
+            h.join().unwrap()
+        });
+
+        assert!(
+            waited,
+            "spawned timer did not fire within 2 s: scheduler is starving the runtime"
+        );
+
+        // The handler keeps re-queueing forever, so we can't `shutdown`
+        // cleanly here — the receivers will never close. Drop the
+        // reactor and let the OS reap the thread on process exit.
+        std::mem::forget(handler);
+        std::mem::forget(reactor);
     }
 }

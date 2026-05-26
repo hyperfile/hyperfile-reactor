@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-1.0, minor versions may include breaking changes.
 
+## [0.3.2] - 2026-05-26
+
+### Fixed
+
+- Scheduler no longer starves the reactor's tokio runtime when a handler
+  synchronously re-queues onto a channel that the scheduler can drain via
+  the non-blocking `try_recv` fast path. Previously, such a hot loop would
+  spin without ever yielding to the runtime, so timers (`tokio::time::sleep`)
+  and I/O futures spawned via `tokio::task::spawn` from inside `handle`
+  would never make progress.
+
+  The fix calls `tokio::task::consume_budget().await` once per scheduler
+  iteration. This is a no-op when budget is plentiful and forces a
+  cooperative yield (~every 128 iterations by default) so the runtime
+  can drive its I/O and timer drivers.
+
+### Changed
+
+- Minimum tokio version bumped from `1` to `1.27` (the release that
+  stabilized `tokio::task::consume_budget`).
+
+[0.3.2]: https://github.com/hyperfile/hyperfile-reactor/releases/tag/v0.3.2
+
 ## [0.3.1] - 2026-05-26
 
 This is the first published release of the 0.3 line. (0.3.0 was tagged
